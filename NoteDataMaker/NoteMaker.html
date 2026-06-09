@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Arduino Score Editor V8 (Data Size Tracker)</title>
+    <style>
+        :root {
+            --row-height: 16px;
+            --kb-width: 60px;
+            --tick-width: 2px;
+        }
+        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; color: #333; }
+        .panel { background: #fff; padding: 15px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        h1, h3 { margin-top: 0; }
+        .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; }
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        label { font-size: 0.75rem; font-weight: bold; color: #666; }
+        input, select { padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85rem; }
+        button { padding: 6px 12px; background: #007bff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.danger { background: #ff4d4f; }
+        button.danger:hover { background: #d9363e; }
+        button.success { background: #28a745; }
+        button.success:hover { background: #218838; }
+        button.warning { background: #ff9800; }
+        button.warning:hover { background: #e68a00; }
+        
+        /* 編集パネル（枠の固定化） */
+        #edit-panel-wrapper { 
+            min-height: 85px; display: flex; flex-direction: column; justify-content: center; 
+            transition: background 0.2s, border 0.2s; border: 1px solid transparent;
+        }
+        
+        /* ピアノロール全体のコンテナ */
+        .piano-roll-outer { width: 100%; height: 600px; overflow: auto; border: 1px solid #ccc; background: #fff; position: relative; user-select: none; }
+        .piano-roll-content { display: flex; position: relative; width: max-content;}
+        
+        /* 鍵盤部分 */
+        .keyboard { position: sticky; left: 0; z-index: 100; width: var(--kb-width); background: #fff; flex-shrink: 0; border-right: 2px solid #333; }
+        .key { height: var(--row-height); box-sizing: border-box; border-bottom: 1px solid #eee; position: relative; font-size: 9px; display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; color: #999; }
+        .key.black { background: #f8f8f8; }
+        .key.black::after { content: ""; position: absolute; right: 0; top: 0; width: 60%; height: 100%; background: #333; z-index: 2; }
+
+        /* グリッド部分 */
+        .grid-container { position: relative; background-color: #fff; cursor: crosshair; flex-shrink: 0; flex-grow: 0;}
+        .measure-header { position: sticky; top: 0; height: 25px; z-index: 50; display: flex; pointer-events: none; }
+        .measure-mark { position: absolute; height: 100%; padding-left: 4px; font-size: 10px; color: #666; line-height: 25px; white-space: nowrap; }
+        .grid-lines {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;
+            background-image: 
+                linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px),
+                linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, #eee 1px, transparent 1px);
+            background-size: calc(96 * var(--tick-width)) 100%, calc(24 * var(--tick-width)) 100%, 100% var(--row-height);
+        }
+
+        /* 音符レイヤーとブロック */
+        #notes-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .note-block {
+            position: absolute; background: rgba(0, 123, 255, 0.8); border: 1px solid #0056b3; height: var(--row-height);
+            box-sizing: border-box; border-radius: 2px; color: white; font-size: 9px; padding: 0 4px; display: flex; align-items: center; overflow: hidden; z-index: 10;
+            pointer-events: auto; cursor: move; transition: filter 0.1s;
+        }
+        .note-block:hover { filter: brightness(1.2); }
+        .note-block.selected { background: rgba(255, 152, 0, 0.9); border: 1px solid #e65100; box-shadow: 0 0 5px rgba(255, 152, 0, 0.8); z-index: 20; }
+        .resize-handle { position: absolute; right: 0; top: 0; width: 8px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,0.2); }
+        .resize-handle:hover { background: rgba(255,255,255,0.6); }
+
+        /* 範囲選択ボックス */
+        .selection-box {
+            position: absolute; border: 1px dashed #007bff; background: rgba(0, 123, 255, 0.15); pointer-events: none; z-index: 1000; display: none;
+        }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        th, td { border-bottom: 1px solid #eee; padding: 6px; text-align: left; font-size: 0.8rem; }
+        th { background: #f8f9fa; }
+        textarea { width: 100%; height: 400px; font-family: monospace; border: 1px solid #ddd; border-radius: 8px; padding: 10px; box-sizing: border-box; }
+        
+        .file-info { font-size: 0.8rem; color: #555; margin-left: 10px; font-weight: bold; }
+        .data-size-info { margin-top: 10px; font-size: 0.95rem; font-weight: bold; color: #d84315; }
+    </style>
+</head>
+<body>
+
+    <div class="panel" style="display: flex; gap: 10px; align-items: center; background: #e8f5e9; border: 1px solid #c8e6c9; padding: 10px 15px; flex-wrap: wrap;">
+        <button class="danger" onclick="createNew()">📄 新規作成</button>
+        <span class="file-info" id="current-file-display">編集中: song_data.json</span>
+        
+        <div style="border-left: 2px solid #ccc; height: 24px; margin: 0 5px;"></div>
+        
+        <button onclick="document.getElementById('file-input').click()">📂 単体ファイル読込</button>
+        <button class="success" onclick="exportToFile()">💾 単体保存</button>
+        <input type="file" id="file-input" style="display: none;" accept=".json" onchange="importFromFile(event)">
+        
+        <div style="border-left: 2px solid #ccc; height: 24px; margin: 0 5px;"></div>
+        
+        <button class="warning" id="btn-link" onclick="linkSaveDataFolder()">📁 SaveDataフォルダ接続</button>
+        <select id="file-selector" style="width: 150px;" disabled>
+            <option value="">-- 未接続 --</option>
+        </select>
+        <button id="btn-load" onclick="loadFromFolder()" disabled>📂 フォルダから読込</button>
+        <button class="success" id="btn-save" onclick="saveToFolder()" disabled>💾 フォルダへ保存</button>
+        
+        <span id="auto-save-msg" style="margin-left: auto; font-size: 0.8rem; color: #4caf50; font-weight: bold; opacity: 0; transition: opacity 0.5s;">
+            ✔ 自動保存されました
+        </span>
+    </div>
+
+    <div class="panel">
+        <h3 style="color: #007bff;">✏️ ピアノロールにクリックで配置するデフォルト設定</h3>
+        <div class="row">
+            <div class="form-group">
+                <label>長さ(tick)</label>
+                <div style="display:flex; gap:5px;">
+                    <select id="durationSym" onchange="document.getElementById('duration').value=this.value">
+                        <option value="6">6</option><option value="12">12</option><option value="18">18</option><option value="24" selected>24</option><option value="36">36</option><option value="48">48</option>
+                        <option value="72">72</option><option value="96">96</option><option value="144">144</option><option value="192">192</option>
+                    </select>
+                    <input type="number" id="duration" value="24" min="1" style="width: 50px;">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>開始Vel</label>
+                <div style="display:flex; gap:5px;">
+                    <select onchange="document.getElementById('vStartNum').value=this.value"><option value="16">ppp (16)</option><option value="32">pp (32)</option><option value="48">p (48)</option><option value="64">mp (64)</option><option value="80" selected>mf (80)</option><option value="96">f (96)</option><option value="112">ff (112)</option><option value="127">fff (127)</option></select>
+                    <input type="number" id="vStartNum" value="80" min="0" max="127" style="width:40px;">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>終了Vel</label>
+                <div style="display:flex; gap:5px;">
+                    <select onchange="document.getElementById('vEndNum').value=this.value"><option value="16">ppp (16)</option><option value="32">pp (32)</option><option value="48">p (48)</option><option value="64">mp (64)</option><option value="80" selected>mf (80)</option><option value="96">f (96)</option><option value="112">ff (112)</option><option value="127">fff (127)</option></select>
+                    <input type="number" id="vEndNum" value="80" min="0" max="127" style="width:40px;">
+                </div>
+            </div>
+            <!--
+            <div class="form-group"><label>楽器</label><select id="instr"><option value="0">Piano</option><option value="1">Flute</option><option value="2">Strings</option><option value="3">Drum</option></select></div>
+            <div class="form-group"><label>奏法</label><select id="artic"><option value="0">Normal</option><option value="1">Staccato</option><option value="2">Legato</option></select></div>
+            -->
+        </div>
+    </div>
+
+    <div class="panel" id="edit-panel-wrapper">
+        <div id="no-selection-msg" style="text-align: center; color: #999; font-weight: bold;">
+            🎵 音符が選択されていません。ピアノロール上の音符をクリックしてください。
+        </div>
+        
+        <div id="edit-panel" style="display: none; width: 100%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                <h3 id="edit-panel-title" style="margin: 0; color: #e65100;">🎯 選択中の音符を編集</h3>
+                <button class="danger" onclick="deleteSelected()">🗑 削除 (Delキー)</button>
+            </div>
+            <div class="row" style="margin-bottom: 0;">
+                <div class="form-group">
+                    <label>小節</label>
+                    <input type="number" id="e-measure" min="1" max="682" style="width: 50px;" onchange="updateNoteFromUI(this)">
+                </div>
+                <div class="form-group">
+                    <label>Tick</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-tickSym" onchange="document.getElementById('e-tick').value=this.value; updateNoteFromUI(document.getElementById('e-tick'))">
+                            <option value="">--</option><option value="0">0</option><option value="12">12</option><option value="18">18</option><option value="24">24</option>
+                            <option value="36">36</option><option value="48">48</option><option value="60">60</option><option value="72">72</option><option value="84">84</option>
+                        </select>
+                        <input type="number" id="e-tick" min="0" max="95" style="width: 40px;" onchange="updateNoteFromUI(this)">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>音程(Pitch)</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-pitch" onchange="updateNoteFromUI(this)"><option value="">--</option></select>
+                        <input type="number" id="e-pitchNum" min="0" max="127" style="width: 45px;" onchange="updateNoteFromUI(this)">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>長さ(tick)</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-durSym" onchange="document.getElementById('e-dur').value=this.value; updateNoteFromUI(document.getElementById('e-dur'))">
+                            <option value="">--</option><option value="6">6</option><option value="12">12</option><option value="18">18</option><option value="24">24</option><option value="36">36</option><option value="48">48</option>
+                            <option value="72">72</option><option value="96">96</option><option value="144">144</option><option value="192">192</option>
+                        </select>
+                        <input type="number" id="e-dur" min="1" style="width: 50px;" onchange="updateNoteFromUI(this)">
+                    </div>
+                </div>
+                <div class="form-group"><label>開始Vel</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-vsSym" onchange="document.getElementById('e-vs').value=this.value; updateNoteFromUI(document.getElementById('e-vs'))">
+                            <option value="">--</option><option value="16">ppp</option><option value="32">pp</option><option value="48">p</option><option value="64">mp</option><option value="80">mf</option><option value="96">f</option><option value="112">ff</option><option value="127">fff</option>
+                        </select>
+                        <input type="number" id="e-vs" min="0" max="127" style="width:40px;" onchange="updateNoteFromUI(this)">
+                    </div>
+                </div>
+                <div class="form-group"><label>終了Vel</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-veSym" onchange="document.getElementById('e-ve').value=this.value; updateNoteFromUI(document.getElementById('e-ve'))">
+                            <option value="">--</option><option value="16">ppp</option><option value="32">pp</option><option value="48">p</option><option value="64">mp</option><option value="80">mf</option><option value="96">f</option><option value="112">ff</option><option value="127">fff</option>
+                        </select>
+                        <input type="number" id="e-ve" min="0" max="127" style="width:40px;" onchange="updateNoteFromUI(this)">
+                    </div>
+                </div>
+                </div>
+        </div>
+    </div>
+
+    <div class="panel" style="padding: 10px;">
+        <div class="piano-roll-outer" id="scroll-area">
+            <div class="piano-roll-content">
+                <div class="keyboard" id="keyboard"></div>
+                <div class="grid-container" id="grid-container">
+                    <div class="measure-header" id="measure-header"></div>
+                    <div class="grid-lines" id="grid-lines"></div>
+                    <div id="notes-layer"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div style="display:flex; gap:20px;">
+        <div class="panel" style="flex:1;">
+            <h3>Arduino 出力コード</h3>
+            <textarea id="output"></textarea>
+            <div id="data-size-display" class="data-size-info">推定データサイズ: 0 Byte (音符数: 0)</div>
+        </div>
+        <div class="panel" style="flex:1; max-height: 500px; overflow-y: auto;">
+            <h3>音符リスト</h3>
+            <table id="note-table">
+                <thead><tr><th>小節</th><th>Tick</th><th>音</th><th>長</th><th>Vel</th><th>index</th><th>操作</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="panel" style="background: #fafafa; border: 1px solid #e0e0e0; margin-top: 15px;">
+        <h3 style="color: #495057; margin-bottom: 12px; font-size: 0.95rem;">💡 操作説明</h3>
+        <div style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.8rem; line-height: 1.6; color: #495057;">
+            <div style="flex: 1; min-width: 260px;">
+                <strong style="color: #007bff; display: block; margin-bottom: 4px;">▼ マウス基本操作</strong>
+                <ul style="margin: 0; padding-left: 18px;">
+                    <li><strong>音符の追加：</strong> グリッドの空いている場所をクリック</li>
+                    <li><strong>音符の単一選択・移動：</strong> 音符をクリックしてドラッグ</li>
+                    <li><strong>音符の長さを変える：</strong> 音符の右端（リサイズハンドル）をドラッグ</li>
+                </ul>
+            </div>
+            <div style="flex: 1; min-width: 260px;">
+                <strong style="color: #e65100; display: block; margin-bottom: 4px;">▼ 複数選択（Shiftキー）</strong>
+                <ul style="margin: 0; padding-left: 18px;">
+                    <li><strong>まとめて選択：</strong> <kbd>Shift</kbd> を押しながら、音符のない場所をドラッグ</li>
+                    <li><strong>まとめて選択解除：</strong> <kbd>Shift</kbd> を押しながら、選択中の音符のみをドラッグ</li>
+                    <li><strong>選択の個別追加／解除：</strong> <kbd>Shift</kbd> を押しながら音符をクリック</li>
+                    <li><strong>複数まとめて移動：</strong> 複数選択した状態のまま、いずれかの音符をドラッグ</li>
+                </ul>
+            </div>
+            <div style="flex: 1; min-width: 280px;">
+                <strong style="color: #28a745; display: block; margin-bottom: 4px;">▼ ショートカットキー（Mac: Cmd ／ Win: Ctrl）</strong>
+                <ul style="margin: 0; padding-left: 18px;">
+                    <li><strong>削除：</strong> <kbd>Delete</kbd> または <kbd>Backspace</kbd></li>
+                    <li><strong>音符の複製：</strong> <kbd>Cmd (Ctrl)</kbd> + <kbd>C</kbd> （同じ位置に選択外としてスタンプ）</li>
+                    <li><strong>ひとつ戻る (Undo)：</strong> <kbd>Cmd (Ctrl)</kbd> + <kbd>Z</kbd></li>
+                    <li><strong>ひとつ進む (Redo)：</strong> <kbd>Cmd (Ctrl)</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd> <span style="color:#888;">(Winは <kbd>Ctrl</kbd>+<kbd>Y</kbd> も可)</span></li>
+                </ul>
+            </div>
+        </div>
+        <div style="font-size: 0.75rem; color: #868e96; margin-top: 10px; border-top: 1px solid #e9ecef; padding-top: 6px;">
+            ※注意: 数値入力欄や出力コード欄などのテキスト入力中に、エディタのショートカットキー（削除や戻るなど）が誤発動することはありません。
+        </div>
+    </div>
+
+<script>
+const ROW_HEIGHT = 16;
+const TICK_WIDTH = 2;
+const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+let notes = [];
+let selectedNoteIds = new Set();
+
+// ドラッグ・範囲選択状態管理
+let isDragging = false;
+let isResizing = false;
+let isSelectingRange = false;
+let startX = 0, startY = 0;
+let rangeStartX = 0, rangeStartY = 0;
+let initDur = 0;
+let selectionBox = null;
+
+// Undo / Redo 用の履歴管理スタック
+let undoStack = [];
+let redoStack = [];
+let currentHistoryState = null;
+
+let directoryHandle = null;
+let currentFileName = "song_data";
+
+window.onload = () => {
+    buildKeyboard();
+    initInteractions();
+    loadFromLocal();
+    updateAll(false, false); 
+    initHistory(); 
+    document.getElementById('scroll-area').scrollTop = (127 - 72) * ROW_HEIGHT;
+};
+
+function updateFileNameDisplay() {
+    document.getElementById('current-file-display').innerText = `編集中: ${currentFileName}.json`;
+}
+
+// ==========================================
+// ★ Undo / Redo システム
+// ==========================================
+function initHistory() {
+    currentHistoryState = JSON.stringify({ notes: notes, selectedIds: Array.from(selectedNoteIds) });
+}
+
+function commitHistory() {
+    const newState = JSON.stringify({ notes: notes, selectedIds: Array.from(selectedNoteIds) });
+    if (newState === currentHistoryState) return; 
+    
+    undoStack.push(currentHistoryState);
+    redoStack = []; 
+    currentHistoryState = newState;
+}
+
+function undo() {
+    if (undoStack.length === 0) return;
+    redoStack.push(currentHistoryState);
+    currentHistoryState = undoStack.pop();
+    
+    const state = JSON.parse(currentHistoryState);
+    notes = state.notes;
+    selectedNoteIds = new Set(state.selectedIds);
+    updateAll(true, false); 
+    showAutoSaveMsg("↩ 元に戻しました (Undo)");
+}
+
+function redo() {
+    if (redoStack.length === 0) return;
+    undoStack.push(currentHistoryState);
+    currentHistoryState = redoStack.pop();
+    
+    const state = JSON.parse(currentHistoryState);
+    notes = state.notes;
+    selectedNoteIds = new Set(state.selectedIds);
+    updateAll(true, false); 
+    showAutoSaveMsg("↪ やり直しました (Redo)");
+}
+
+// ==========================================
+// ★ 複製 (Duplicate) 機能
+// ==========================================
+function duplicateSelected() {
+    if (selectedNoteIds.size === 0) return;
+    
+    const newNotes = [];
+    notes.forEach(n => {
+        if (selectedNoteIds.has(n.id)) {
+            const duplicated = {
+                ...n,
+                id: Date.now() + Math.random()
+            };
+            newNotes.push(duplicated);
+        }
+    });
+    
+    notes = notes.concat(newNotes);
+    updateAll();
+    showAutoSaveMsg(`📋 ${newNotes.length}個の音符を複製しました`);
+}
+
+// ==========================================
+// ★ 単体ファイル操作
+// ==========================================
+async function exportToFile() {
+    if(notes.length === 0) return alert("保存する音符データがありません。");
+    try {
+        if (window.showSaveFilePicker) {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: currentFileName + ".json",
+                types: [{ description: 'JSONファイル', accept: { 'application/json': ['.json'] } }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(JSON.stringify(notes, null, 2));
+            await writable.close();
+            currentFileName = handle.name.endsWith('.json') ? handle.name.slice(0, -5) : handle.name;
+            updateFileNameDisplay();
+            showAutoSaveMsg("✔ " + handle.name + " に保存しました");
+        } else {
+            let baseName = prompt("保存するファイル名を入力してください", currentFileName);
+            if (!baseName) return;
+            if (baseName.endsWith('.json')) baseName = baseName.slice(0, -5);
+            currentFileName = baseName;
+            const fileName = baseName + ".json";
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(notes));
+            const a = document.createElement('a'); a.href = dataStr; a.download = fileName;
+            document.body.appendChild(a); a.click(); a.remove();
+            updateFileNameDisplay();
+            showAutoSaveMsg("✔ ダウンロードしました");
+        }
+    } catch (e) { if (e.name !== 'AbortError') alert("保存に失敗しました。"); }
+}
+
+function importFromFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const importedNotes = JSON.parse(e.target.result);
+            if (Array.isArray(importedNotes)) {
+                notes = importedNotes;
+                selectedNoteIds.clear();
+                currentFileName = file.name.endsWith('.json') ? file.name.slice(0, -5) : file.name;
+                updateFileNameDisplay();
+                updateAll(true, false);
+                initHistory();
+                alert("データの読み込みが完了しました。");
+            } else { alert("無効なデータ形式です。"); }
+        } catch (error) { alert("ファイルの解析に失敗しました。"); }
+        document.getElementById('file-input').value = ""; 
+    };
+    reader.readAsText(file);
+}
+
+// ==========================================
+// ★ フォルダアクセス API
+// ==========================================
+async function linkSaveDataFolder() {
+    try {
+        directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        document.getElementById('btn-link').innerText = "✔ 接続済み";
+        document.getElementById('btn-link').classList.replace('warning', 'success');
+        document.getElementById('file-selector').disabled = false;
+        document.getElementById('btn-load').disabled = false;
+        document.getElementById('btn-save').disabled = false;
+        updateFileList();
+    } catch (e) { if (e.name !== 'AbortError') alert("対応ブラウザでのみ使用可能です。"); }
+}
+
+async function updateFileList() {
+    if (!directoryHandle) return;
+    const selector = document.getElementById('file-selector');
+    selector.innerHTML = '<option value="">-- ファイルを選択 --</option>';
+    try {
+        for await (const entry of directoryHandle.values()) {
+            if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+                const option = document.createElement('option');
+                option.value = entry.name; option.innerText = entry.name;
+                selector.appendChild(option);
+            }
+        }
+    } catch (e) { console.error(e); }
+}
+
+async function saveToFolder() {
+    if (!directoryHandle) return alert("先にSaveDataフォルダを接続してください。");
+    let baseName = prompt("保存するファイル名を入力してください", currentFileName);
+    if (!baseName) return; 
+    if (baseName.endsWith('.json')) baseName = baseName.slice(0, -5);
+    const fileName = baseName + ".json";
+    try {
+        await directoryHandle.getFileHandle(fileName);
+        if (!confirm(`「${fileName}」は既に存在します。上書きしますか？`)) return;
+    } catch (e) { if (e.name !== 'NotFoundError') return; }
+    try {
+        const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(notes, null, 2));
+        await writable.close();
+        currentFileName = baseName;
+        updateFileNameDisplay();
+        showAutoSaveMsg("✔ " + fileName + " に保存しました");
+        updateFileList(); 
+        document.getElementById('file-selector').value = fileName;
+    } catch (e) { alert("保存に失敗しました。"); }
+}
+
+async function loadFromFolder() {
+    if (!directoryHandle) return alert("先にSaveDataフォルダを接続してください。");
+    const fileName = document.getElementById('file-selector').value;
+    if (!fileName) return alert("読み込むファイルを選択してください。");
+    if(!confirm("現在のデータは上書きされます。よろしいですか？")) return;
+    try {
+        const fileHandle = await directoryHandle.getFileHandle(fileName);
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        notes = JSON.parse(text);
+        selectedNoteIds.clear();
+        currentFileName = fileName.endsWith('.json') ? fileName.slice(0, -5) : fileName;
+        updateFileNameDisplay();
+        updateAll(true, false);
+        initHistory();
+        showAutoSaveMsg("✔ " + fileName + " を読み込みました");
+    } catch (e) { alert("ファイルの読み込みに失敗しました。"); }
+}
+
+// ==========================================
+// ★ UI共通ロジック
+// ==========================================
+function createNew() {
+    if(confirm("現在のデータは破棄されます。新規作成しますか？")) {
+        notes = [];
+        selectedNoteIds.clear();
+        currentFileName = "song_data";
+        updateFileNameDisplay();
+        updateAll(true, false);
+        initHistory();
+        document.getElementById('file-selector').value = ""; 
+    }
+}
+
+function saveToLocal() {
+    localStorage.setItem('arduinoScoreData', JSON.stringify({ fileName: currentFileName, notes: notes }));
+}
+
+function loadFromLocal() {
+    const saved = localStorage.getItem('arduinoScoreData');
+    if (saved) {
+        try { 
+            const data = JSON.parse(saved);
+            if (Array.isArray(data)) { notes = data; } 
+            else { notes = data.notes; currentFileName = data.fileName || "song_data"; }
+            updateFileNameDisplay();
+        } catch(e) {}
+    }
+}
+
+function showAutoSaveMsg(customMsg) {
+    const msg = document.getElementById('auto-save-msg');
+    msg.innerText = customMsg || "✔ 自動保存されました";
+    msg.style.opacity = 1;
+    setTimeout(() => { msg.style.opacity = 0; }, 2000);
+}
+
+function getNoteName(midi) { return noteNames[midi % 12] + (Math.floor(midi / 12) - 1); }
+
+function buildKeyboard() {
+    const kb = document.getElementById('keyboard');
+    const ePitch = document.getElementById('e-pitch');
+    for (let i = 127; i >= 0; i--) {
+        const name = getNoteName(i);
+        const isBlack = name.includes("#");
+        const key = document.createElement('div');
+        key.className = `key ${isBlack ? 'black' : ''}`;
+        if (name.startsWith("C") && !isBlack) key.innerText = name;
+        kb.appendChild(key);
+
+        const opt = document.createElement('option');
+        opt.value = i; opt.text = `${name} (${i})`;
+        ePitch.appendChild(opt);
+    }
+}
+
+function initInteractions() {
+    const grid = document.getElementById('grid-container');
+
+    grid.addEventListener('mousedown', (e) => {
+        const rect = grid.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        // ① リサイズハンドルを掴んだ場合
+        if (e.target.classList.contains('resize-handle')) {
+            isResizing = true;
+            const noteId = parseFloat(e.target.parentElement.dataset.id);
+            grid._resizeTargetId = noteId;
+            const note = notes.find(n => n.id === noteId);
+            startX = e.clientX;
+            initDur = note.d;
+            
+            if (!selectedNoteIds.has(noteId)) {
+                if (!e.shiftKey) selectedNoteIds.clear();
+                selectedNoteIds.add(noteId);
+            }
+            e.stopPropagation();
+            refreshSelection();
+            return;
+        }
+        
+        // ② 音符ブロックを掴んだ場合
+        if (e.target.classList.contains('note-block')) {
+            const noteId = parseFloat(e.target.dataset.id);
+            
+            if (e.shiftKey) {
+                if (selectedNoteIds.has(noteId)) {
+                    selectedNoteIds.delete(noteId);
+                    isDragging = false; 
+                } else {
+                    selectedNoteIds.add(noteId);
+                    isDragging = true;
+                }
+            } else {
+                if (!selectedNoteIds.has(noteId)) {
+                    selectedNoteIds.clear();
+                    selectedNoteIds.add(noteId);
+                }
+                isDragging = true;
+            }
+            
+            if (isDragging) {
+                startX = e.clientX;
+                startY = e.clientY;
+                notes.forEach(n => {
+                    if (selectedNoteIds.has(n.id)) {
+                        n._initTick = (n.m - 1) * 96 + n.t;
+                        n._initPitch = n.p;
+                    }
+                });
+            }
+            e.stopPropagation();
+            refreshSelection();
+            return;
+        }
+
+        // ③ 背景（バーのない場所）をクリックした場合
+        if (e.shiftKey) {
+            isSelectingRange = true;
+            rangeStartX = x;
+            rangeStartY = y;
+            
+            if (!selectionBox) {
+                selectionBox = document.createElement('div');
+                selectionBox.className = 'selection-box';
+                grid.appendChild(selectionBox);
+            }
+            selectionBox.style.left = x + 'px'; selectionBox.style.top = y + 'px';
+            selectionBox.style.width = '0px'; selectionBox.style.height = '0px';
+            selectionBox.style.display = 'block';
+            
+            grid._initSelectedIds = new Set(selectedNoteIds);
+            e.preventDefault();
+        } else {
+            selectedNoteIds.clear();
+            const rawTick = Math.floor(x / TICK_WIDTH);
+            const absTick = Math.round(rawTick / 6) * 6;
+            const pitch = 127 - Math.floor(y / ROW_HEIGHT);
+            
+            if (pitch >= 0 && pitch <= 127) {
+                const n = {
+                    id: Date.now() + Math.random(),
+                    m: Math.floor(absTick / 96) + 1,
+                    t: absTick % 96,
+                    p: pitch,
+                    d: parseInt(document.getElementById('duration').value),
+                    vs: parseInt(document.getElementById('vStartNum').value),
+                    ve: parseInt(document.getElementById('vEndNum').value),
+                    // ★ HTML側がコメントアウトされていてもNullエラーにならないよう安全策を適用
+                    inst: document.getElementById('instr') ? parseInt(document.getElementById('instr').value) : 0,
+                    art: document.getElementById('artic') ? parseInt(document.getElementById('artic').value) : 0
+                };
+                notes.push(n);
+                selectedNoteIds.add(n.id);
+                updateAll();
+            } else { updateAll(); }
+        }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isSelectingRange && selectionBox) {
+            const rect = grid.getBoundingClientRect();
+            let currentX = e.clientX - rect.left;
+            let currentY = e.clientY - rect.top;
+            
+            currentX = Math.max(0, Math.min(currentX, rect.width));
+            currentY = Math.max(0, Math.min(currentY, rect.height));
+            
+            const x = Math.min(rangeStartX, currentX);
+            const y = Math.min(rangeStartY, currentY);
+            const w = Math.abs(rangeStartX - currentX);
+            const h = Math.abs(rangeStartY - currentY);
+            
+            selectionBox.style.left = x + 'px'; selectionBox.style.top = y + 'px';
+            selectionBox.style.width = w + 'px'; selectionBox.style.height = h + 'px';
+            
+            const startTick = Math.floor(x / TICK_WIDTH);
+            const endTick = Math.floor((x + w) / TICK_WIDTH);
+            const maxPitch = 127 - Math.floor(y / ROW_HEIGHT);
+            const minPitch = 127 - Math.floor((y + h) / ROW_HEIGHT);
+            
+            // 1. 現在の範囲内にある音符のIDをリストアップ
+            const notesInRange = [];
+            notes.forEach(n => {
+                const nStart = (n.m - 1) * 96 + n.t;
+                const nEnd = nStart + n.d;
+                if (nStart < endTick && nEnd > startTick && n.p >= minPitch && n.p <= maxPitch) {
+                    notesInRange.push(n.id);
+                }
+            });
+            
+            // 2. 範囲内の音符が「すべてドラッグ開始前に選択済みだったか」を判定
+            let allSelectedBefore = notesInRange.length > 0;
+            for (let id of notesInRange) {
+                if (!grid._initSelectedIds.has(id)) {
+                    allSelectedBefore = false;
+                    break;
+                }
+            }
+            
+            // 3. 条件に応じて、ベース状態から「一括解除」か「一括選択」かを切り替える
+            selectedNoteIds = new Set(grid._initSelectedIds);
+            notesInRange.forEach(id => {
+                if (allSelectedBefore) {
+                    selectedNoteIds.delete(id); // 範囲内がすべて選択済みの場合は解除
+                } else {
+                    selectedNoteIds.add(id);    // 未選択が混ざっている場合は選択に追加
+                }
+            });
+            
+            renderPianoRoll();
+            populateEditPanel();
+            return;
+        }
+
+        if (selectedNoteIds.size === 0) return;
+        
+        if (isDragging) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            const deltaTick = Math.floor(dx / TICK_WIDTH);
+            const deltaPitch = -Math.round(dy / ROW_HEIGHT);
+            
+            selectedNoteIds.forEach(id => {
+                const note = notes.find(n => n.id === id);
+                if (!note || note._initTick === undefined) return;
+                
+                let newAbsTick = note._initTick + deltaTick;
+                if (newAbsTick < 0) newAbsTick = 0;
+                
+                let newPitch = note._initPitch + deltaPitch;
+                note.p = Math.max(0, Math.min(newPitch, 127));
+                note.m = Math.floor(newAbsTick / 96) + 1;
+                note.t = newAbsTick % 96;
+            });
+            renderPianoRoll();
+            populateEditPanel();
+        } 
+        else if (isResizing && grid._resizeTargetId) {
+            const dx = e.clientX - startX;
+            const note = notes.find(n => n.id === grid._resizeTargetId);
+            if (note) {
+                let newDur = initDur + Math.floor(dx / TICK_WIDTH);
+                note.d = Math.max(1, newDur);
+            }
+            renderPianoRoll();
+            populateEditPanel();
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isSelectingRange && selectionBox) { selectionBox.style.display = 'none'; }
+        if (isDragging || isResizing || isSelectingRange) {
+            isDragging = false; isResizing = false; isSelectingRange = false;
+            grid._resizeTargetId = null;
+            notes.forEach(n => { delete n._initTick; delete n._initPitch; });
+            updateAll(); 
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return; 
+
+        const isMod = e.metaKey || e.ctrlKey; 
+        const key = e.key.toLowerCase();
+
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNoteIds.size > 0) {
+            e.preventDefault();
+            deleteSelected();
+        }
+        
+        if (isMod && key === 'z' && !e.shiftKey) {
+            e.preventDefault();
+            undo();
+        }
+
+        if ((isMod && key === 'z' && e.shiftKey) || (!e.metaKey && e.ctrlKey && key === 'y')) {
+            e.preventDefault();
+            redo();
+        }
+
+        if (isMod && key === 'c') {
+            e.preventDefault();
+            duplicateSelected();
+        }
+    });
+}
+
+function deleteSelected() { 
+    notes = notes.filter(n => !selectedNoteIds.has(n.id)); 
+    selectedNoteIds.clear(); 
+    updateAll(); 
+}
+function deleteNote(id) { 
+    notes = notes.filter(n => n.id !== id); 
+    selectedNoteIds.delete(id); 
+    updateAll(); 
+}
+function refreshSelection() { renderPianoRoll(); populateEditPanel(); }
+
+// ★ 改修：変更があったUI要素のみを特定し、選択中の全音符に適用する
+function updateNoteFromUI(targetEl) {
+    if (selectedNoteIds.size === 0) return;
+    
+    let prop = null;
+    let val = parseInt(targetEl.value);
+    if (isNaN(val)) return; 
+    
+    if (targetEl.id === 'e-measure') prop = 'm';
+    if (targetEl.id === 'e-tick') prop = 't';
+    if (targetEl.id === 'e-pitch' || targetEl.id === 'e-pitchNum') {
+        prop = 'p';
+        document.getElementById('e-pitch').value = val;
+        document.getElementById('e-pitchNum').value = val;
+    }
+    if (targetEl.id === 'e-dur') prop = 'd';
+    if (targetEl.id === 'e-vs') prop = 'vs';
+    if (targetEl.id === 'e-ve') prop = 've';
+    
+    /* 楽器と奏法の編集項目は今後の拡張用のためコメント文処理
+    if (targetEl.id === 'e-inst') prop = 'inst';
+    if (targetEl.id === 'e-art') prop = 'art';
+    */
+    
+    if (!prop) return;
+    
+    selectedNoteIds.forEach(id => {
+        const note = notes.find(n => n.id === id);
+        if (note) {
+            note[prop] = val;
+        }
+    });
+    
+    updateAll();
+}
+
+// ★ 追加：複数選択時に共通する値を探すヘルパー関数
+function getCommonValue(prop) {
+    if (selectedNoteIds.size === 0) return "";
+    const ids = Array.from(selectedNoteIds);
+    const firstNote = notes.find(n => n.id === ids[0]);
+    if (!firstNote) return "";
+    const firstVal = firstNote[prop];
+    
+    for (let i = 1; i < ids.length; i++) {
+        const note = notes.find(n => n.id === ids[i]);
+        if (!note || note[prop] !== firstVal) {
+            return ""; // 値がバラバラな場合は空にする
+        }
+    }
+    return firstVal;
+}
+
+// ★ 改修：複数選択中の一括編集に対応
+function populateEditPanel() {
+    const wrapper = document.getElementById('edit-panel-wrapper');
+    const editPanel = document.getElementById('edit-panel');
+    const noSelMsg = document.getElementById('no-selection-msg');
+    const title = document.getElementById('edit-panel-title');
+    
+    if (selectedNoteIds.size === 0) {
+        wrapper.style.background = '#fff'; wrapper.style.borderColor = 'transparent';
+        editPanel.style.display = 'none'; noSelMsg.style.display = 'block';
+        noSelMsg.innerText = "🎵 音符が選択されていません。ピアノロール上の音符をクリックしてください。";
+        return;
+    }
+    
+    wrapper.style.background = '#e3f2fd'; wrapper.style.borderColor = '#90caf9';
+    editPanel.style.display = 'block'; noSelMsg.style.display = 'none';
+
+    if (selectedNoteIds.size > 1) {
+        title.innerText = `🎯 複数選択中 (${selectedNoteIds.size} 個の音符の一括編集)`;
+    } else {
+        title.innerText = "🎯 選択中の音符を編集";
+    }
+    
+    // 全音符をスキャンして共通の値を取得（バラバラなら空文字に）
+    const mM = getCommonValue('m');
+    const tT = getCommonValue('t');
+    const pP = getCommonValue('p');
+    const dD = getCommonValue('d');
+    const vS = getCommonValue('vs');
+    const vE = getCommonValue('ve');
+    /* 今後拡張時に使用
+    const inst = getCommonValue('inst');
+    const art = getCommonValue('art');
+    */
+    
+    document.getElementById('e-measure').value = mM;
+    document.getElementById('e-tick').value = tT;
+    document.getElementById('e-tickSym').value = [0,12,18,24,36,48,60,72,84].includes(tT) ? tT : "";
+    
+    // 音程（セレクトボックスと数値入力を同期）
+    document.getElementById('e-pitch').value = pP;
+    document.getElementById('e-pitchNum').value = pP;
+    
+    document.getElementById('e-dur').value = dD;
+    document.getElementById('e-durSym').value = [6,12,18,24,36,48,72,96,144,192].includes(dD) ? dD : "";
+    
+    // 開始・終了Vel（数値と記号選択肢の両方を同期追従）
+    document.getElementById('e-vs').value = vS;
+    document.getElementById('e-vsSym').value = [16,32,48,64,80,96,112,127].includes(vS) ? vS : "";
+    document.getElementById('e-ve').value = vE;
+    document.getElementById('e-veSym').value = [16,32,48,64,80,96,112,127].includes(vE) ? vE : "";
+    
+    /* 楽器と奏法の代入処理は今後の拡張用のためコメント文処理
+    document.getElementById('e-inst').value = inst;
+    document.getElementById('e-art').value = art;
+    */
+}
+
+function updateAll(doSave = true, doCommit = true) {
+    notes.sort((a,b) => (a.m*100+a.t) - (b.m*100+b.t));
+    renderPianoRoll(); populateEditPanel(); renderTable(); renderCode();
+    if (doSave) { saveToLocal(); }
+    if (doCommit) { commitHistory(); } 
+}
+
+function renderPianoRoll() {
+    const maxM = notes.length > 0 ? Math.max(...notes.map(n => n.m)) : 0;
+    const totalMeasures = Math.max(maxM + 16, 32); 
+    const totalWidth = totalMeasures * 96 * TICK_WIDTH;
+    
+    document.getElementById('grid-container').style.width = totalWidth + "px";
+    document.getElementById('grid-container').style.minWidth = totalWidth + "px"; 
+    document.getElementById('grid-lines').style.width = totalWidth + "px";
+    
+    const header = document.getElementById('measure-header');
+    header.innerHTML = '';
+    for(let i=1; i<=totalMeasures; i++) {
+        const mark = document.createElement('div');
+        mark.className = 'measure-mark'; mark.style.left = (i-1) * 96 * TICK_WIDTH + "px"; mark.innerText = i;
+        header.appendChild(mark);
+    }
+
+    const layer = document.getElementById('notes-layer');
+    layer.innerHTML = '';
+    notes.forEach(n => {
+        const div = document.createElement('div');
+        div.className = `note-block ${selectedNoteIds.has(n.id) ? 'selected' : ''}`;
+        div.dataset.id = n.id;
+        div.style.left = ((n.m-1)*96 + n.t) * TICK_WIDTH + "px";
+        div.style.top = (127 - n.p) * ROW_HEIGHT + "px";
+        div.style.width = n.d * TICK_WIDTH + "px";
+        div.innerText = getNoteName(n.p);
+        const handle = document.createElement('div'); handle.className = 'resize-handle'; div.appendChild(handle);
+        layer.appendChild(div);
+    });
+}
+
+function renderTable() {
+    const tbody = document.querySelector('#note-table tbody');
+    tbody.innerHTML = '';
+    notes.forEach((n, idx) => {
+        const tr = document.createElement('tr');
+        if(selectedNoteIds.has(n.id)) tr.style.background = "#fff3e0";
+        tr.innerHTML = `<td>${n.m}</td><td>${n.t}</td><td>${getNoteName(n.p)}</td><td>${n.d}</td><td>${n.vs}-${n.ve}</td><td>[${idx}]</td>
+                        <td><button class="danger" style="padding:2px 6px;" onclick="deleteNote(${n.id})">削</button></td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+function renderCode() {
+    let out = "NoteData Note[] = {\n";
+    let curM = -1;
+    // ★ 改修：各行のコメント文に通し番号の配列index（[idx]）を追記
+    notes.forEach((n, idx) => {
+        if(n.m !== curM) { out += `\n  // 【${n.m}小節目】\n`; curM = n.m; }
+        const time = (n.m-1)*96 + n.t;
+        out += `  {${time}, ${n.d}, ${n.p}, ${n.vs}, ${n.ve}}, // [${idx}] ${getNoteName(n.p)}\n`;
+    });
+    out += "};";
+    document.getElementById('output').value = out;
+
+    const sizeBytes = notes.length * 7;
+    document.getElementById('data-size-display').innerText = `推定データサイズ: ${sizeBytes} Byte (音符数: ${notes.length})`;
+}
+</script>
+</body>
+</html>
