@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Arduino Score Muxer (データ結合＆分割ツール)</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; color: #333; }
+        .panel { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h1, h2, h3 { margin-top: 0; }
+        .row { display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 15px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 0.8rem; font-weight: bold; color: #666; }
+        input[type="number"], select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; }
+        button { padding: 8px 16px; background: #007bff; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        button.success { background: #28a745; }
+        button.success:hover { background: #218838; }
+        button.warning { background: #ff9800; }
+        button.warning:hover { background: #e68a00; }
+        button.danger { background: #ff4d4f; }
+        button.danger:hover { background: #d9363e; }
+        
+        .box { border: 1px solid #e0e0e0; padding: 15px; border-radius: 8px; background: #fafafa; }
+        ul.file-list { margin: 0; padding-left: 20px; font-size: 0.9rem; color: #444; }
+        ul.file-list li { margin-bottom: 5px; }
+        
+        .log-container { max-height: 200px; overflow-y: auto; background: #1e1e1e; color: #4caf50; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; }
+        .log-container p { margin: 4px 0; }
+        .log-empty { color: #888; font-style: italic; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 0.9rem; }
+        th { background: #f8f9fa; }
+    </style>
+</head>
+<body>
+
+    <div class="panel" style="background: #e3f2fd; border: 1px solid #90caf9;">
+        <h2 style="color: #1565c0; margin-bottom: 10px;">🧩 Arduino Score Muxer</h2>
+        <p style="font-size: 0.9rem; margin: 0; color: #555;">
+            複数の楽譜データ（JSON）を読み込み、指定した範囲を切り出して繋ぎ合わせるツールです。<br>
+            曲の結合、フレーズの抽出、セーブデータの分割に利用できます。
+        </p>
+    </div>
+
+    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 350px;">
+            <div class="panel">
+                <h3>1. 元データの読み込み</h3>
+                <input type="file" id="file-input" multiple accept=".json" onchange="handleFiles(event)" style="margin-bottom: 15px;">
+                <div class="box">
+                    <label>読み込まれたファイル一覧</label>
+                    <ul id="source-file-list" class="file-list">
+                        <li class="log-empty">ファイルが選択されていません</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3 style="color: #e65100;">2. 切り出しと結合</h3>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label>📝 対象ファイルを選択</label>
+                    <select id="sel-source"><option value="">-- 先にファイルを読み込んでください --</option></select>
+                </div>
+                
+                <div class="box" style="margin-bottom: 15px;">
+                    <label style="color: #d84315;">✂️ 切り出す範囲 (From)</label>
+                    <div class="row" style="margin-bottom: 5px;">
+                        <div>開始：<input type="number" id="src-start-m" value="1" min="1" style="width: 60px;"> 小節</div>
+                        <div><input type="number" id="src-start-t" value="0" min="0" max="95" style="width: 50px;"> tick</div>
+                    </div>
+                    <div class="row" style="margin-bottom: 0;">
+                        <div>終了：<input type="number" id="src-end-m" value="10" min="1" style="width: 60px;"> 小節</div>
+                        <div><input type="number" id="src-end-t" value="95" min="0" max="95" style="width: 50px;"> tick</div>
+                    </div>
+                    <p style="font-size: 0.75rem; color: #888; margin-top: 5px;">※1小節は 0〜95 tick です。</p>
+                </div>
+
+                <div class="box" style="margin-bottom: 15px;">
+                    <label style="color: #2e7d32;">📌 結合先（新規データ）の配置位置 (To)</label>
+                    <div class="row" style="margin-bottom: 0;">
+                        <div>開始：<input type="number" id="dest-m" value="1" min="1" style="width: 60px;"> 小節</div>
+                        <div><input type="number" id="dest-t" value="0" min="0" max="95" style="width: 50px;"> tick</div>
+                    </div>
+                </div>
+
+                <button class="warning" style="width: 100%; font-size: 1.1rem;" onclick="extractAndAdd()">🔽 新規データに適用 (追加)</button>
+            </div>
+        </div>
+
+        <div style="flex: 1; min-width: 350px;">
+            <div class="panel" style="display: flex; flex-direction: column; height: calc(100% - 40px);">
+                <h3>3. 新規セーブデータの状態</h3>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <div class="box" style="flex: 1; text-align: center;">
+                        <div style="font-size: 0.8rem; color: #666;">総音符数</div>
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #007bff;" id="out-count">0</div>
+                    </div>
+                    <div class="box" style="flex: 1; text-align: center;">
+                        <div style="font-size: 0.8rem; color: #666;">最終小節</div>
+                        <div style="font-size: 1.5rem; font-weight: bold; color: #e65100;" id="out-last-m">1</div>
+                    </div>
+                </div>
+
+                <label>操作履歴（結合ログ）</label>
+                <div class="log-container" id="action-log" style="flex-grow: 1; margin-bottom: 15px;">
+                    <p class="log-empty">まだ何も追加されていません。</p>
+                </div>
+
+                <div style="display: flex; gap: 10px; justify-content: space-between;">
+                    <div style="display: flex; gap: 10px;">
+                        <button onclick="undo()" class="danger">↩ Undo (ひとつ戻す)</button>
+                        <button onclick="clearOutput()" style="background: #6c757d;">🗑 全クリア</button>
+                    </div>
+                    <button class="success" onclick="saveOutput()" style="font-size: 1.1rem;">💾 新規データとして保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const TICKS_PER_MEASURE = 96;
+    let sourceFiles = {}; // 読み込んだファイル群 { "filename": [notes...] }
+    
+    // 出力データとUndo管理
+    let outputNotes = [];
+    let actionLogs = [];
+    let historyStack = [];
+
+    // =====================================
+    // 1. ファイル読み込み処理
+    // =====================================
+    function handleFiles(event) {
+        const files = event.target.files;
+        if (files.length === 0) return;
+
+        let processed = 0;
+        for (let file of files) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    // エディタの仕様上、配列かオブジェクトの {notes: []} か確認
+                    let notes = Array.isArray(data) ? data : data.notes;
+                    if (!notes) throw new Error("無効な形式です");
+                    
+                    sourceFiles[file.name] = notes;
+                } catch (err) {
+                    alert(`${file.name} の解析に失敗しました。`);
+                } finally {
+                    processed++;
+                    if (processed === files.length) {
+                        updateSourceUI();
+                        document.getElementById('file-input').value = ""; // リセット
+                    }
+                }
+            };
+            reader.readAsText(file);
+        }
+    }
+
+    function updateSourceUI() {
+        const listContainer = document.getElementById('source-file-list');
+        const selSource = document.getElementById('sel-source');
+        
+        listContainer.innerHTML = '';
+        selSource.innerHTML = '';
+
+        const keys = Object.keys(sourceFiles);
+        if (keys.length === 0) {
+            listContainer.innerHTML = '<li class="log-empty">ファイルが選択されていません</li>';
+            selSource.innerHTML = '<option value="">-- 先にファイルを読み込んでください --</option>';
+            return;
+        }
+
+        keys.forEach(name => {
+            const notes = sourceFiles[name];
+            let maxM = 1;
+            if (notes.length > 0) maxM = Math.max(...notes.map(n => n.m));
+            
+            // リストの更新
+            const li = document.createElement('li');
+            li.innerHTML = `<strong>${name}</strong> <span style="color:#888;">(全 ${maxM} 小節 / ${notes.length} notes)</span>`;
+            listContainer.appendChild(li);
+
+            // セレクトボックスの更新
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.innerText = `${name} (全${maxM}小節)`;
+            selSource.appendChild(opt);
+        });
+
+        // デフォルトで最初のファイルの最終小節を終了値にセット
+        const firstNotes = sourceFiles[keys[0]];
+        if (firstNotes.length > 0) {
+            document.getElementById('src-end-m').value = Math.max(...firstNotes.map(n => n.m));
+        }
+    }
+
+    document.getElementById('sel-source').addEventListener('change', (e) => {
+        const name = e.target.value;
+        if (!name) return;
+        const notes = sourceFiles[name];
+        if (notes.length > 0) {
+            document.getElementById('src-end-m').value = Math.max(...notes.map(n => n.m));
+        }
+    });
+
+    // =====================================
+    // 2. 抽出と結合処理
+    // =====================================
+    function extractAndAdd() {
+        const srcName = document.getElementById('sel-source').value;
+        if (!srcName) return alert("抽出元のファイルを選択してください。");
+
+        const notes = sourceFiles[srcName];
+
+        const sM = parseInt(document.getElementById('src-start-m').value);
+        const sT = parseInt(document.getElementById('src-start-t').value);
+        const eM = parseInt(document.getElementById('src-end-m').value);
+        const eT = parseInt(document.getElementById('src-end-t').value);
+
+        const dM = parseInt(document.getElementById('dest-m').value);
+        const dT = parseInt(document.getElementById('dest-t').value);
+
+        // 絶対Tickの計算
+        const startAbs = (sM - 1) * TICKS_PER_MEASURE + sT;
+        const endAbs = (eM - 1) * TICKS_PER_MEASURE + eT;
+        const destAbs = (dM - 1) * TICKS_PER_MEASURE + dT;
+
+        if (startAbs > endAbs) return alert("抽出範囲の開始と終了が逆転しています。");
+
+        const extracted = [];
+        let extractedCount = 0;
+
+        notes.forEach(n => {
+            const nAbs = (n.m - 1) * TICKS_PER_MEASURE + n.t;
+            
+            // 指定範囲内に開始位置が含まれている音符を抽出対象とする
+            if (nAbs >= startAbs && nAbs <= endAbs) {
+                // 抽出開始位置からの相対Tick
+                const relTick = nAbs - startAbs;
+                // 配置先における新しい絶対Tick
+                const newAbs = destAbs + relTick;
+
+                const newNote = {
+                    ...n,
+                    id: Date.now() + Math.random(), // IDの衝突を防ぐために再生成
+                    m: Math.floor(newAbs / TICKS_PER_MEASURE) + 1,
+                    t: newAbs % TICKS_PER_MEASURE
+                };
+
+                // エディタのテンポラリプロパティがあれば一応消しておく
+                delete newNote._initTick;
+                delete newNote._initPitch;
+
+                extracted.push(newNote);
+                extractedCount++;
+            }
+        });
+
+        if (extractedCount === 0) {
+            return alert("指定された範囲に音符が見つかりませんでした。");
+        }
+
+        // --- Undo履歴を保存 ---
+        saveState();
+
+        // --- データの追加とソート ---
+        outputNotes = outputNotes.concat(extracted);
+        outputNotes.sort((a, b) => ((a.m * 100) + a.t) - ((b.m * 100) + b.t));
+
+        // --- ログの追加 ---
+        const logMsg = `▶ [${srcName}] の ${sM}小節(${sT}t)〜${eM}小節(${eT}t) を ⇒ 新規 ${dM}小節(${dT}t) に追加しました。 (+${extractedCount} notes)`;
+        actionLogs.push(logMsg);
+
+        updateOutputUI();
+    }
+
+    // =====================================
+    // 3. 出力UIと保存
+    // =====================================
+    function saveState() {
+        // 現在の状態をディープコピーしてスタックに積む
+        historyStack.push(JSON.stringify({
+            notes: outputNotes,
+            logs: actionLogs
+        }));
+    }
+
+    function undo() {
+        if (historyStack.length === 0) return alert("これ以上戻せません。");
+        
+        const prevState = JSON.parse(historyStack.pop());
+        outputNotes = prevState.notes;
+        actionLogs = prevState.logs;
+        
+        updateOutputUI();
+    }
+
+    function clearOutput() {
+        if (!confirm("新規データを全てクリアしますか？")) return;
+        saveState();
+        outputNotes = [];
+        actionLogs = [];
+        updateOutputUI();
+    }
+
+    function updateOutputUI() {
+        // カウントと最終小節
+        document.getElementById('out-count').innerText = outputNotes.length;
+        
+        let maxM = 1;
+        if (outputNotes.length > 0) {
+            maxM = Math.max(...outputNotes.map(n => n.m));
+        }
+        document.getElementById('out-last-m').innerText = maxM;
+
+        // 次の配置先のデフォルト値を「最終小節の次の小節」に自動アップデート
+        document.getElementById('dest-m').value = outputNotes.length > 0 ? maxM + 1 : 1;
+        document.getElementById('dest-t').value = 0;
+
+        // ログの描画
+        const logBox = document.getElementById('action-log');
+        logBox.innerHTML = '';
+        if (actionLogs.length === 0) {
+            logBox.innerHTML = '<p class="log-empty">まだ何も追加されていません。</p>';
+        } else {
+            actionLogs.forEach(txt => {
+                const p = document.createElement('p');
+                p.innerText = txt;
+                logBox.appendChild(p);
+            });
+            // スクロールを一番下へ
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+
+    function saveOutput() {
+        if (outputNotes.length === 0) return alert("保存するデータがありません。");
+        
+        const baseName = prompt("保存するファイル名を入力してください", "muxed_song_data");
+        if (!baseName) return;
+        
+        const fileName = baseName + (baseName.endsWith('.json') ? "" : ".json");
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(outputNotes, null, 2));
+        
+        const a = document.createElement('a'); 
+        a.href = dataStr; 
+        a.download = fileName;
+        document.body.appendChild(a); 
+        a.click(); 
+        a.remove();
+    }
+</script>
+</body>
+</html>

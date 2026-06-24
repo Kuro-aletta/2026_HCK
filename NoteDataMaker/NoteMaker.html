@@ -220,7 +220,10 @@
         <div class="panel" style="flex:1;">
             <h3>Arduino 出力コード</h3>
             <textarea id="output"></textarea>
-            <div id="data-size-display" class="data-size-info">推定データサイズ: 0 Byte (音符数: 0)</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+                <div id="data-size-display" class="data-size-info" style="margin-top: 0;">推定データサイズ: 0 Byte (音符数: 0)</div>
+                <button class="success" onclick="exportForProcessing()">📥 Processing用JSONファイルを出力</button>
+            </div>
         </div>
         <div class="panel" style="flex:1; max-height: 500px; overflow-y: auto;">
             <h3>音符リスト</h3>
@@ -304,6 +307,21 @@ function updateFileNameDisplay() {
 }
 
 // ==========================================
+// ★ ID重複の自動修復機能 (セーブデータ救済用)
+// ==========================================
+function fixDuplicateIds() {
+    const seenIds = new Set();
+    notes.forEach(n => {
+        n.id = String(n.id); // 古い数値IDを文字列に変換
+        if (seenIds.has(n.id)) {
+            // 重複を発見した場合は新しいIDを再発行
+            n.id = crypto.randomUUID();
+        }
+        seenIds.add(n.id);
+    });
+}
+
+// ==========================================
 // ★ Undo / Redo システム
 // ==========================================
 function initHistory() {
@@ -354,7 +372,7 @@ function duplicateSelected() {
         if (selectedNoteIds.has(n.id)) {
             const duplicated = {
                 ...n,
-                id: Date.now() + Math.random()
+                id: crypto.randomUUID() // ★ より安全なUUIDに変更
             };
             newNotes.push(duplicated);
         }
@@ -406,6 +424,7 @@ function importFromFile(event) {
             const importedNotes = JSON.parse(e.target.result);
             if (Array.isArray(importedNotes)) {
                 notes = importedNotes;
+                fixDuplicateIds(); // ★ 読み込み時にIDを修復
                 selectedNoteIds.clear();
                 currentFileName = file.name.endsWith('.json') ? file.name.slice(0, -5) : file.name;
                 updateFileNameDisplay();
@@ -482,6 +501,7 @@ async function loadFromFolder() {
         const file = await fileHandle.getFile();
         const text = await file.text();
         notes = JSON.parse(text);
+        fixDuplicateIds(); // ★ 読み込み時にIDを修復
         selectedNoteIds.clear();
         currentFileName = fileName.endsWith('.json') ? fileName.slice(0, -5) : fileName;
         updateFileNameDisplay();
@@ -517,6 +537,7 @@ function loadFromLocal() {
             const data = JSON.parse(saved);
             if (Array.isArray(data)) { notes = data; } 
             else { notes = data.notes; currentFileName = data.fileName || "song_data"; }
+            fixDuplicateIds(); // ★ 読み込み時にIDを修復
             updateFileNameDisplay();
         } catch(e) {}
     }
@@ -559,7 +580,7 @@ function initInteractions() {
         // ① リサイズハンドルを掴んだ場合
         if (e.target.classList.contains('resize-handle')) {
             isResizing = true;
-            const noteId = parseFloat(e.target.parentElement.dataset.id);
+            const noteId = e.target.parentElement.dataset.id; // ★ IDが文字列化されたためparseFloatを削除
             grid._resizeTargetId = noteId;
             const note = notes.find(n => n.id === noteId);
             startX = e.clientX;
@@ -576,7 +597,7 @@ function initInteractions() {
         
         // ② 音符ブロックを掴んだ場合
         if (e.target.classList.contains('note-block')) {
-            const noteId = parseFloat(e.target.dataset.id);
+            const noteId = e.target.dataset.id; // ★ IDが文字列化されたためparseFloatを削除
             
             if (e.shiftKey) {
                 if (selectedNoteIds.has(noteId)) {
@@ -634,14 +655,13 @@ function initInteractions() {
             
             if (pitch >= 0 && pitch <= 127) {
                 const n = {
-                    id: Date.now() + Math.random(),
+                    id: crypto.randomUUID(), // ★ より安全なUUIDに変更
                     m: Math.floor(absTick / 96) + 1,
                     t: absTick % 96,
                     p: pitch,
                     d: parseInt(document.getElementById('duration').value),
                     vs: parseInt(document.getElementById('vStartNum').value),
                     ve: parseInt(document.getElementById('vEndNum').value),
-                    // ★ HTML側がコメントアウトされていてもNullエラーにならないよう安全策を適用
                     inst: document.getElementById('instr') ? parseInt(document.getElementById('instr').value) : 0,
                     art: document.getElementById('artic') ? parseInt(document.getElementById('artic').value) : 0
                 };
@@ -793,7 +813,7 @@ function deleteNote(id) {
 }
 function refreshSelection() { renderPianoRoll(); populateEditPanel(); }
 
-// ★ 改修：変更があったUI要素のみを特定し、選択中の全音符に適用する
+// ★ 変更があったUI要素のみを特定し、選択中の全音符に適用する
 function updateNoteFromUI(targetEl) {
     if (selectedNoteIds.size === 0) return;
     
@@ -812,11 +832,6 @@ function updateNoteFromUI(targetEl) {
     if (targetEl.id === 'e-vs') prop = 'vs';
     if (targetEl.id === 'e-ve') prop = 've';
     
-    /* 楽器と奏法の編集項目は今後の拡張用のためコメント文処理
-    if (targetEl.id === 'e-inst') prop = 'inst';
-    if (targetEl.id === 'e-art') prop = 'art';
-    */
-    
     if (!prop) return;
     
     selectedNoteIds.forEach(id => {
@@ -829,7 +844,7 @@ function updateNoteFromUI(targetEl) {
     updateAll();
 }
 
-// ★ 追加：複数選択時に共通する値を探すヘルパー関数
+// ★ 複数選択時に共通する値を探すヘルパー関数
 function getCommonValue(prop) {
     if (selectedNoteIds.size === 0) return "";
     const ids = Array.from(selectedNoteIds);
@@ -846,7 +861,7 @@ function getCommonValue(prop) {
     return firstVal;
 }
 
-// ★ 改修：複数選択中の一括編集に対応
+// ★ 複数選択中の一括編集に対応
 function populateEditPanel() {
     const wrapper = document.getElementById('edit-panel-wrapper');
     const editPanel = document.getElementById('edit-panel');
@@ -876,10 +891,6 @@ function populateEditPanel() {
     const dD = getCommonValue('d');
     const vS = getCommonValue('vs');
     const vE = getCommonValue('ve');
-    /* 今後拡張時に使用
-    const inst = getCommonValue('inst');
-    const art = getCommonValue('art');
-    */
     
     document.getElementById('e-measure').value = mM;
     document.getElementById('e-tick').value = tT;
@@ -897,11 +908,6 @@ function populateEditPanel() {
     document.getElementById('e-vsSym').value = [16,32,48,64,80,96,112,127].includes(vS) ? vS : "";
     document.getElementById('e-ve').value = vE;
     document.getElementById('e-veSym').value = [16,32,48,64,80,96,112,127].includes(vE) ? vE : "";
-    
-    /* 楽器と奏法の代入処理は今後の拡張用のためコメント文処理
-    document.getElementById('e-inst').value = inst;
-    document.getElementById('e-art').value = art;
-    */
 }
 
 function updateAll(doSave = true, doCommit = true) {
@@ -949,8 +955,9 @@ function renderTable() {
     notes.forEach((n, idx) => {
         const tr = document.createElement('tr');
         if(selectedNoteIds.has(n.id)) tr.style.background = "#fff3e0";
+        // ★ IDが文字列化されたため、onclick時の引数をクォーテーションで囲む
         tr.innerHTML = `<td>${n.m}</td><td>${n.t}</td><td>${getNoteName(n.p)}</td><td>${n.d}</td><td>${n.vs}-${n.ve}</td><td>[${idx}]</td>
-                        <td><button class="danger" style="padding:2px 6px;" onclick="deleteNote(${n.id})">削</button></td>`;
+                        <td><button class="danger" style="padding:2px 6px;" onclick="deleteNote('${n.id}')">削</button></td>`;
         tbody.appendChild(tr);
     });
 }
@@ -958,7 +965,6 @@ function renderTable() {
 function renderCode() {
     let out = "NoteData Note[] = {\n";
     let curM = -1;
-    // ★ 改修：各行のコメント文に通し番号の配列index（[idx]）を追記
     notes.forEach((n, idx) => {
         if(n.m !== curM) { out += `\n  // 【${n.m}小節目】\n`; curM = n.m; }
         const time = (n.m-1)*96 + n.t;
@@ -969,6 +975,31 @@ function renderCode() {
 
     const sizeBytes = notes.length * 7;
     document.getElementById('data-size-display').innerText = `推定データサイズ: ${sizeBytes} Byte (音符数: ${notes.length})`;
+}
+
+// ==========================================
+// ★ Processing用JSONエクスポート
+// ==========================================
+function exportForProcessing() {
+    if (notes.length === 0) return alert("保存する音符データがありません。");
+    
+    // Processing側の float[][] Load2LUT(String fileName) で読み込めるように、
+    // [[time, d, p, vs, ve], [time, d, p, vs, ve], ...] の形式に変換します。
+    const processingData = notes.map(n => {
+        const time = (n.m - 1) * 96 + n.t;
+        return [time, n.d, n.p, n.vs, n.ve];
+    });
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(processingData));
+    const a = document.createElement('a');
+    a.href = dataStr;
+    // エディタのセーブデータと区別がつくように _processing を付与
+    a.download = currentFileName + "_processing.json"; 
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    
+    showAutoSaveMsg("✔ Processing用JSONをダウンロードしました");
 }
 </script>
 </body>
