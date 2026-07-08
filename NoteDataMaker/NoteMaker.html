@@ -49,10 +49,30 @@
         .grid-lines {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;
             background-image: 
+                /* 1. 横線 (少し濃くして最前面に配置) */
+                linear-gradient(to bottom, #ddd 1px, transparent 1px),
+                /* 2. 縦線 (小節) */
                 linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px),
+                /* 3. 縦線 (拍) */
                 linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px),
-                linear-gradient(to bottom, #eee 1px, transparent 1px);
-            background-size: calc(96 * var(--tick-width)) 100%, calc(24 * var(--tick-width)) 100%, 100% var(--row-height);
+                /* 4. 黒鍵の背景 (1オクターブ=12半音分のパターンをループ) */
+                linear-gradient(to bottom,
+                    transparent 0px, transparent 16px,     /* G */
+                    rgba(0,0,0,0.04) 16px, rgba(0,0,0,0.04) 32px, /* F# */
+                    transparent 32px, transparent 64px,    /* F, E */
+                    rgba(0,0,0,0.04) 64px, rgba(0,0,0,0.04) 80px, /* D# */
+                    transparent 80px, transparent 96px,    /* D */
+                    rgba(0,0,0,0.04) 96px, rgba(0,0,0,0.04) 112px, /* C# */
+                    transparent 112px, transparent 144px,  /* C, B */
+                    rgba(0,0,0,0.04) 144px, rgba(0,0,0,0.04) 160px, /* A# */
+                    transparent 160px, transparent 176px,  /* A */
+                    rgba(0,0,0,0.04) 176px, rgba(0,0,0,0.04) 192px  /* G# */
+                );
+            background-size: 
+                100% var(--row-height),
+                calc(96 * var(--tick-width)) 100%,
+                calc(24 * var(--tick-width)) 100%,
+                100% calc(12 * var(--row-height)); /* 1オクターブ(12行)ごとにループ */
         }
 
         /* 音符レイヤーとブロック */
@@ -134,10 +154,17 @@
                     <input type="number" id="vEndNum" value="80" min="0" max="127" style="width:40px;">
                 </div>
             </div>
-            <!--
-            <div class="form-group"><label>楽器</label><select id="instr"><option value="0">Piano</option><option value="1">Flute</option><option value="2">Strings</option><option value="3">Drum</option></select></div>
-            <div class="form-group"><label>奏法</label><select id="artic"><option value="0">Normal</option><option value="1">Staccato</option><option value="2">Legato</option></select></div>
-            -->
+            <div class="form-group">
+                <label>奏法</label>
+                <div style="display:flex; gap:5px;">
+                    <select onchange="document.getElementById('articNum').value=this.value">
+                        <option value="0" selected>0: Normal</option>
+                        <option value="1">1: Staccato</option>
+                        <option value="2">2: Legato</option>
+                    </select>
+                    <input type="number" id="articNum" value="0" min="0" style="width:40px;">
+                </div>
+            </div>
         </div>
     </div>
 
@@ -199,7 +226,15 @@
                         <input type="number" id="e-ve" min="0" max="127" style="width:40px;" onchange="updateNoteFromUI(this)">
                     </div>
                 </div>
+                <div class="form-group"><label>奏法</label>
+                    <div style="display:flex; gap:5px;">
+                        <select id="e-artSym" onchange="document.getElementById('e-art').value=this.value; updateNoteFromUI(document.getElementById('e-art'))">
+                            <option value="">--</option><option value="0">0: Normal</option><option value="1">1: Staccato</option><option value="2">2: Legato</option>
+                        </select>
+                        <input type="number" id="e-art" min="0" style="width:40px;" onchange="updateNoteFromUI(this)">
+                    </div>
                 </div>
+            </div>
         </div>
     </div>
 
@@ -218,7 +253,13 @@
 
     <div style="display:flex; gap:20px;">
         <div class="panel" style="flex:1;">
-            <h3>Arduino 出力コード</h3>
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 5px;">
+                <h3 style="margin: 0;">Arduino 出力コード</h3>
+                <label style="font-size: 0.85rem; font-weight: bold; color: #007bff; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="output-art-toggle" onchange="renderCode()" style="cursor: pointer;">
+                    奏法を出力に含める
+                </label>
+            </div>
             <textarea id="output"></textarea>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
                 <div id="data-size-display" class="data-size-info" style="margin-top: 0;">推定データサイズ: 0 Byte (音符数: 0)</div>
@@ -228,7 +269,7 @@
         <div class="panel" style="flex:1; max-height: 500px; overflow-y: auto;">
             <h3>音符リスト</h3>
             <table id="note-table">
-                <thead><tr><th>小節</th><th>Tick</th><th>音</th><th>長</th><th>Vel</th><th>index</th><th>操作</th></tr></thead>
+                <thead><tr><th>小節</th><th>Tick</th><th>音</th><th>長</th><th>Vel</th><th>奏法</th><th>index</th><th>操作</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -307,7 +348,7 @@ function updateFileNameDisplay() {
 }
 
 // ==========================================
-// ★ ID重複の自動修復機能 (セーブデータ救済用)
+// ★ ID重複の自動修復機能 ＆ 過去データの互換性対応
 // ==========================================
 function fixDuplicateIds() {
     const seenIds = new Set();
@@ -318,6 +359,11 @@ function fixDuplicateIds() {
             n.id = crypto.randomUUID();
         }
         seenIds.add(n.id);
+        
+        // ★ 過去のセーブデータに奏法が存在しない場合は 0 (Normal) を補完する
+        if (n.art === undefined) {
+            n.art = 0;
+        }
     });
 }
 
@@ -372,7 +418,7 @@ function duplicateSelected() {
         if (selectedNoteIds.has(n.id)) {
             const duplicated = {
                 ...n,
-                id: crypto.randomUUID() // ★ より安全なUUIDに変更
+                id: crypto.randomUUID()
             };
             newNotes.push(duplicated);
         }
@@ -424,7 +470,7 @@ function importFromFile(event) {
             const importedNotes = JSON.parse(e.target.result);
             if (Array.isArray(importedNotes)) {
                 notes = importedNotes;
-                fixDuplicateIds(); // ★ 読み込み時にIDを修復
+                fixDuplicateIds();
                 selectedNoteIds.clear();
                 currentFileName = file.name.endsWith('.json') ? file.name.slice(0, -5) : file.name;
                 updateFileNameDisplay();
@@ -501,7 +547,7 @@ async function loadFromFolder() {
         const file = await fileHandle.getFile();
         const text = await file.text();
         notes = JSON.parse(text);
-        fixDuplicateIds(); // ★ 読み込み時にIDを修復
+        fixDuplicateIds();
         selectedNoteIds.clear();
         currentFileName = fileName.endsWith('.json') ? fileName.slice(0, -5) : fileName;
         updateFileNameDisplay();
@@ -537,7 +583,7 @@ function loadFromLocal() {
             const data = JSON.parse(saved);
             if (Array.isArray(data)) { notes = data; } 
             else { notes = data.notes; currentFileName = data.fileName || "song_data"; }
-            fixDuplicateIds(); // ★ 読み込み時にIDを修復
+            fixDuplicateIds();
             updateFileNameDisplay();
         } catch(e) {}
     }
@@ -580,7 +626,7 @@ function initInteractions() {
         // ① リサイズハンドルを掴んだ場合
         if (e.target.classList.contains('resize-handle')) {
             isResizing = true;
-            const noteId = e.target.parentElement.dataset.id; // ★ IDが文字列化されたためparseFloatを削除
+            const noteId = e.target.parentElement.dataset.id;
             grid._resizeTargetId = noteId;
             const note = notes.find(n => n.id === noteId);
             startX = e.clientX;
@@ -597,7 +643,7 @@ function initInteractions() {
         
         // ② 音符ブロックを掴んだ場合
         if (e.target.classList.contains('note-block')) {
-            const noteId = e.target.dataset.id; // ★ IDが文字列化されたためparseFloatを削除
+            const noteId = e.target.dataset.id;
             
             if (e.shiftKey) {
                 if (selectedNoteIds.has(noteId)) {
@@ -655,15 +701,15 @@ function initInteractions() {
             
             if (pitch >= 0 && pitch <= 127) {
                 const n = {
-                    id: crypto.randomUUID(), // ★ より安全なUUIDに変更
+                    id: crypto.randomUUID(),
                     m: Math.floor(absTick / 96) + 1,
                     t: absTick % 96,
                     p: pitch,
                     d: parseInt(document.getElementById('duration').value),
                     vs: parseInt(document.getElementById('vStartNum').value),
                     ve: parseInt(document.getElementById('vEndNum').value),
-                    inst: document.getElementById('instr') ? parseInt(document.getElementById('instr').value) : 0,
-                    art: document.getElementById('artic') ? parseInt(document.getElementById('artic').value) : 0
+                    // ★ UIから奏法の値を取得
+                    art: parseInt(document.getElementById('articNum').value) || 0
                 };
                 notes.push(n);
                 selectedNoteIds.add(n.id);
@@ -694,7 +740,6 @@ function initInteractions() {
             const maxPitch = 127 - Math.floor(y / ROW_HEIGHT);
             const minPitch = 127 - Math.floor((y + h) / ROW_HEIGHT);
             
-            // 1. 現在の範囲内にある音符のIDをリストアップ
             const notesInRange = [];
             notes.forEach(n => {
                 const nStart = (n.m - 1) * 96 + n.t;
@@ -704,7 +749,6 @@ function initInteractions() {
                 }
             });
             
-            // 2. 範囲内の音符が「すべてドラッグ開始前に選択済みだったか」を判定
             let allSelectedBefore = notesInRange.length > 0;
             for (let id of notesInRange) {
                 if (!grid._initSelectedIds.has(id)) {
@@ -713,13 +757,12 @@ function initInteractions() {
                 }
             }
             
-            // 3. 条件に応じて、ベース状態から「一括解除」か「一括選択」かを切り替える
             selectedNoteIds = new Set(grid._initSelectedIds);
             notesInRange.forEach(id => {
                 if (allSelectedBefore) {
-                    selectedNoteIds.delete(id); // 範囲内がすべて選択済みの場合は解除
+                    selectedNoteIds.delete(id);
                 } else {
-                    selectedNoteIds.add(id);    // 未選択が混ざっている場合は選択に追加
+                    selectedNoteIds.add(id);
                 }
             });
             
@@ -831,6 +874,7 @@ function updateNoteFromUI(targetEl) {
     if (targetEl.id === 'e-dur') prop = 'd';
     if (targetEl.id === 'e-vs') prop = 'vs';
     if (targetEl.id === 'e-ve') prop = 've';
+    if (targetEl.id === 'e-art') prop = 'art'; // ★ 奏法の追加
     
     if (!prop) return;
     
@@ -844,7 +888,6 @@ function updateNoteFromUI(targetEl) {
     updateAll();
 }
 
-// ★ 複数選択時に共通する値を探すヘルパー関数
 function getCommonValue(prop) {
     if (selectedNoteIds.size === 0) return "";
     const ids = Array.from(selectedNoteIds);
@@ -855,13 +898,12 @@ function getCommonValue(prop) {
     for (let i = 1; i < ids.length; i++) {
         const note = notes.find(n => n.id === ids[i]);
         if (!note || note[prop] !== firstVal) {
-            return ""; // 値がバラバラな場合は空にする
+            return ""; 
         }
     }
     return firstVal;
 }
 
-// ★ 複数選択中の一括編集に対応
 function populateEditPanel() {
     const wrapper = document.getElementById('edit-panel-wrapper');
     const editPanel = document.getElementById('edit-panel');
@@ -884,30 +926,32 @@ function populateEditPanel() {
         title.innerText = "🎯 選択中の音符を編集";
     }
     
-    // 全音符をスキャンして共通の値を取得（バラバラなら空文字に）
     const mM = getCommonValue('m');
     const tT = getCommonValue('t');
     const pP = getCommonValue('p');
     const dD = getCommonValue('d');
     const vS = getCommonValue('vs');
     const vE = getCommonValue('ve');
+    const aA = getCommonValue('art'); // ★ 奏法の取得
     
     document.getElementById('e-measure').value = mM;
     document.getElementById('e-tick').value = tT;
     document.getElementById('e-tickSym').value = [0,12,18,24,36,48,60,72,84].includes(tT) ? tT : "";
     
-    // 音程（セレクトボックスと数値入力を同期）
     document.getElementById('e-pitch').value = pP;
     document.getElementById('e-pitchNum').value = pP;
     
     document.getElementById('e-dur').value = dD;
     document.getElementById('e-durSym').value = [6,12,18,24,36,48,72,96,144,192].includes(dD) ? dD : "";
     
-    // 開始・終了Vel（数値と記号選択肢の両方を同期追従）
     document.getElementById('e-vs').value = vS;
     document.getElementById('e-vsSym').value = [16,32,48,64,80,96,112,127].includes(vS) ? vS : "";
     document.getElementById('e-ve').value = vE;
     document.getElementById('e-veSym').value = [16,32,48,64,80,96,112,127].includes(vE) ? vE : "";
+
+    // ★ 奏法のUI同期
+    document.getElementById('e-art').value = aA;
+    document.getElementById('e-artSym').value = [0,1,2].includes(aA) ? aA : "";
 }
 
 function updateAll(doSave = true, doCommit = true) {
@@ -955,25 +999,35 @@ function renderTable() {
     notes.forEach((n, idx) => {
         const tr = document.createElement('tr');
         if(selectedNoteIds.has(n.id)) tr.style.background = "#fff3e0";
-        // ★ IDが文字列化されたため、onclick時の引数をクォーテーションで囲む
-        tr.innerHTML = `<td>${n.m}</td><td>${n.t}</td><td>${getNoteName(n.p)}</td><td>${n.d}</td><td>${n.vs}-${n.ve}</td><td>[${idx}]</td>
+        // ★ テーブルに「奏法」のカラムを追加
+        tr.innerHTML = `<td>${n.m}</td><td>${n.t}</td><td>${getNoteName(n.p)}</td><td>${n.d}</td><td>${n.vs}-${n.ve}</td><td>${n.art}</td><td>[${idx}]</td>
                         <td><button class="danger" style="padding:2px 6px;" onclick="deleteNote('${n.id}')">削</button></td>`;
         tbody.appendChild(tr);
     });
 }
 
 function renderCode() {
+    const includeArt = document.getElementById('output-art-toggle').checked;
+    
     let out = "NoteData Note[] = {\n";
     let curM = -1;
     notes.forEach((n, idx) => {
         if(n.m !== curM) { out += `\n  // 【${n.m}小節目】\n`; curM = n.m; }
         const time = (n.m-1)*96 + n.t;
-        out += `  {${time}, ${n.d}, ${n.p}, ${n.vs}, ${n.ve}}, // [${idx}] ${getNoteName(n.p)}\n`;
+        
+        // ★ チェックボックスの状態に応じて出力の構造を切り替える
+        if (includeArt) {
+            out += `  {${time}, ${n.d}, ${n.p}, ${n.vs}, ${n.ve}, ${n.art}}, // [${idx}] ${getNoteName(n.p)}\n`;
+        } else {
+            out += `  {${time}, ${n.d}, ${n.p}, ${n.vs}, ${n.ve}}, // [${idx}] ${getNoteName(n.p)}\n`;
+        }
     });
     out += "};";
     document.getElementById('output').value = out;
 
-    const sizeBytes = notes.length * 7;
+    // ★ 奏法が含まれる場合は要素が増えるため推定サイズを更新（仮に+1byteとする）
+    const bytesPerNote = includeArt ? 8 : 7;
+    const sizeBytes = notes.length * bytesPerNote;
     document.getElementById('data-size-display').innerText = `推定データサイズ: ${sizeBytes} Byte (音符数: ${notes.length})`;
 }
 
@@ -983,17 +1037,22 @@ function renderCode() {
 function exportForProcessing() {
     if (notes.length === 0) return alert("保存する音符データがありません。");
     
-    // Processing側の float[][] Load2LUT(String fileName) で読み込めるように、
-    // [[time, d, p, vs, ve], [time, d, p, vs, ve], ...] の形式に変換します。
+    const includeArt = document.getElementById('output-art-toggle').checked;
+    
     const processingData = notes.map(n => {
         const time = (n.m - 1) * 96 + n.t;
-        return [time, n.d, n.p, n.vs, n.ve];
+        
+        // ★ チェックボックスの状態に応じて出力の構造を切り替える
+        if (includeArt) {
+            return [time, n.d, n.p, n.vs, n.ve, n.art];
+        } else {
+            return [time, n.d, n.p, n.vs, n.ve];
+        }
     });
 
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(processingData));
     const a = document.createElement('a');
     a.href = dataStr;
-    // エディタのセーブデータと区別がつくように _processing を付与
     a.download = currentFileName + "_processing.json"; 
     document.body.appendChild(a);
     a.click();

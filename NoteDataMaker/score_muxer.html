@@ -130,6 +130,26 @@
     let historyStack = [];
 
     // =====================================
+    // ★ ID重複の自動修復機能 ＆ 奏法データの互換性補完を追加
+    // =====================================
+    function fixDuplicateIds(notes) {
+        const seenIds = new Set();
+        notes.forEach(n => {
+            n.id = String(n.id); // 古い数値IDを文字列に変換
+            if (seenIds.has(n.id)) {
+                // 重複を発見した場合は新しいIDを再発行
+                n.id = crypto.randomUUID();
+            }
+            seenIds.add(n.id);
+            
+            // ★ 過去のセーブデータに奏法が存在しない場合は 0 (Normal) を補完する
+            if (n.art === undefined) {
+                n.art = 0;
+            }
+        });
+    }
+
+    // =====================================
     // 1. ファイル読み込み処理
     // =====================================
     function handleFiles(event) {
@@ -145,6 +165,9 @@
                     // エディタの仕様上、配列かオブジェクトの {notes: []} か確認
                     let notes = Array.isArray(data) ? data : data.notes;
                     if (!notes) throw new Error("無効な形式です");
+                    
+                    // ★ 読み込んだ段階でIDの修復と奏法の補完を実行
+                    fixDuplicateIds(notes);
                     
                     sourceFiles[file.name] = notes;
                 } catch (err) {
@@ -246,8 +269,8 @@
                 const newAbs = destAbs + relTick;
 
                 const newNote = {
-                    ...n,
-                    id: Date.now() + Math.random(), // IDの衝突を防ぐために再生成
+                    ...n, // ★ ここで art (奏法) を含む全プロパティがそのまま引き継がれます
+                    id: crypto.randomUUID(), 
                     m: Math.floor(newAbs / TICKS_PER_MEASURE) + 1,
                     t: newAbs % TICKS_PER_MEASURE
                 };
